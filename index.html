@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Universal 1D Barcode + QR Scanner — Simple, Compact, Working</title>
+  <!-- Fallback engine when BarcodeDetector is unavailable -->
+  <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
+  <style>
+    :root{ --card:#ffffff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#0ea5e9; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;background:#f8fafc;color:var(--ink)}
+    header{padding:14px 16px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:10}
+    h1{font-size:18px;margin:0}
+    .wrap{max-width:980px;margin:18px auto;padding:0 14px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .grid{display:grid;gap:14px}
+    @media(min-width:960px){.grid{grid-template-columns:1.1fr .9fr}}
+    label{font-size:13px;color:var(--muted);display:block;margin:6px 0}
+    button,input[type="file"]{padding:9px 12px;border:1px solid var(--line);border-radius:10px}
+    button{background:var(--accent);color:#fff;border:none;font-weight:600;cursor:pointer}
+    button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:6px 10px;background:#fff;font-size:13px}
+    video{width:100%;border-radius:12px;border:1px solid var(--line);background:#000;aspect-ratio:16/9}
+    .result{font-family:ui-monospace, Menlo, monospace;background:#0f172a;color:#e2e8f0;border-radius:12px;padding:12px;overflow:auto}
+    .muted{color:var(--muted)}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    th,td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left}
+    th{font-size:12px;color:var(--muted)}
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📷 Universal 1D Barcode + QR Scanner</h1>
+    <div id="engine-info" class="muted" style="font-size:12px;margin-top:6px"></div>
+  </header>
+
+  <div class="wrap grid">
+    <section class="card">
+      <div class="row">
+        <span class="pill"><input type="checkbox" id="autostop" checked> <label for="autostop" style="margin:0">Stop on scan</label></span>
+        <span class="pill"><input type="checkbox" id="beep" checked> <label for="beep" style="margin:0">Beep</label></span>
+      </div>
+
+      <label>Supported formats (multi-select)</label>
+      <div class="row" id="format-row">
+        <label class="pill"><input type="checkbox" class="fmt" value="QR_CODE" checked> QR</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="CODE_128" checked> CODE128</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="CODE_39" checked> CODE39</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="EAN_13" checked> EAN-13</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="EAN_8" checked> EAN-8</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="UPC_A" checked> UPC-A</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="UPC_E" checked> UPC-E</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="ITF" checked> ITF</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="CODABAR" checked> Codabar</label>
+        <label class="pill"><input type="checkbox" class="fmt" value="CODE_93"> CODE93</label>
+      </div>
+
+      <div class="toolbar" style="margin-top:8px">
+        <button id="btn-start">Start (Back camera)</button>
+        <button id="btn-stop" class="secondary" disabled>Stop</button>
+      </div>
+
+      <video id="preview" playsinline style="margin-top:10px"></video>
+
+      <label style="margin-top:10px">Result</label>
+      <pre id="result" class="result">—</pre>
+      <div class="muted" style="font-size:12px">Camera access requires HTTPS or <code>localhost</code>.</div>
+    </section>
+
+    <aside class="card">
+      <label>Scan from image</label>
+      <input type="file" id="file-input" accept="image/*" />
+
+      <hr style="margin:14px 0">
+      <div class="toolbar">
+        <button id="btn-export" class="secondary">Download history (CSV)</button>
+        <button id="btn-clear" class="secondary">Clear history</button>
+        <span class="muted">History is stored in localStorage.</span>
+      </div>
+
+      <label style="margin-top:8px">Scan history</label>
+      <div style="max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:12px">
+        <table id="history-table">
+          <thead><tr><th>Time</th><th>Content</th><th>Format</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </aside>
+  </div>
+
+  <audio id="beep-audio" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBIAAAABAAEAESsAACJWAAACABYAZGF0YQcAAAABAQEBAQEBAQEBAQ=="></audio>
+
+  <script>
+    // ---------- Utils ----------
+    const $ = sel => document.querySelector(sel);
+    const $$ = sel => Array.from(document.querySelectorAll(sel));
+    const ZX = window.ZXing || window.ZXingBrowser; // fallback global
+
+    // History
+    const LS_KEY = 'scanHistory';
+    const loadHistory = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch { return []; } };
+    const saveHistory = (arr) => localStorage.setItem(LS_KEY, JSON.stringify(arr));
+    const addHistory = (item) => { const all = loadHistory(); all.unshift(item); saveHistory(all); renderHistory(); };
+    function renderHistory(){
+      const body = $('#history-table tbody'); body.innerHTML = '';
+      loadHistory().forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${new Date(r.ts).toLocaleString()}</td><td>${escapeHtml(r.text)}</td><td>${escapeHtml(r.format||'')}</td>`;
+        body.appendChild(tr);
+      });
+    }
+    function exportCSV(){
+      const rows = loadHistory();
+      const header = ['timestamp','text','format'];
+      const csv = [header.join(',')].concat(rows.map(r => [new Date(r.ts).toISOString(), JSON.stringify(r.text), JSON.stringify(r.format||'')].join(','))).join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'scan_history.csv'; a.click(); URL.revokeObjectURL(url);
+    }
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+    // Format mapping: ZXing ↔︎ BarcodeDetector
+    const ZX_TO_BD = { QR_CODE:'qr_code', CODE_128:'code_128', CODE_39:'code_39', EAN_13:'ean_13', EAN_8:'ean_8', UPC_A:'upc_a', UPC_E:'upc_e', ITF:'itf', CODABAR:'codabar', CODE_93:'code_93' };
+    const getSelectedBDFormats = () => $$('.fmt:checked').map(cb => ZX_TO_BD[cb.value]).filter(Boolean);
+    const getSelectedZXFormats = () => {
+      if(!ZX || !ZX.BarcodeFormat) return [];
+      return $$('.fmt:checked').map(cb => ZX.BarcodeFormat[cb.value]).filter(Boolean);
+    };
+
+    // Engine state
+    let engine = 'unknown';
+    let running = false;
+    let stream = null;
+    let reader = null;   // ZXing
+    let detector = null; // BarcodeDetector
+    let rafId = null;
+
+    async function ensureEngine(){
+      const info = $('#engine-info');
+      if('BarcodeDetector' in window){
+        const supported = await window.BarcodeDetector.getSupportedFormats().catch(()=>[]);
+        const wanted = getSelectedBDFormats();
+        const formats = (wanted.length? wanted: supported).filter(f => supported.includes(f));
+        detector = new window.BarcodeDetector({ formats });
+        engine = 'BarcodeDetector';
+        if(info) info.textContent = `Engine: Chrome Barcode Detection API (${formats.join(', ')||'auto'})`;
+        return;
+      }
+      if(!ZX){ engine = 'none'; if(info) info.textContent = 'Engine: none (no BarcodeDetector / ZXing)'; return; }
+      const hints = new Map(); const fmts = getSelectedZXFormats(); if(fmts.length) hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, fmts);
+      reader = new ZX.BrowserMultiFormatReader(hints);
+      engine = 'ZXing'; if(info) info.textContent = `Engine: ZXing (${$$('.fmt:checked').map(cb=>cb.value).join(', ')||'all'})`;
+    }
+
+    function onDetect(text, format){
+      $('#result').textContent = JSON.stringify({ text, format }, null, 2);
+      addHistory({ ts: Date.now(), text, format });
+      if($('#beep').checked) $('#beep-audio').play().catch(()=>{});
+      if($('#autostop').checked) stop();
+    }
+
+    async function start(){
+      if(running) return; $('#btn-start').disabled = true; $('#btn-stop').disabled = false; $('#result').textContent = 'Starting…';
+      await ensureEngine();
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      }catch(e){ $('#result').textContent = 'Cannot start camera: ' + (e && e.message ? e.message : e); $('#btn-start').disabled=false; $('#btn-stop').disabled=true; return; }
+      const video = $('#preview'); video.srcObject = stream; await video.play().catch(()=>{});
+
+      if(engine === 'BarcodeDetector') { running = true; scanLoopBD(); return; }
+      if(engine === 'ZXing' && reader){ running = true; await reader.decodeFromVideoDevice(undefined, video, (res, err)=>{ if(res){ onDetect(res.getText(), ZX.BarcodeFormat[res.getBarcodeFormat()]); } }); return; }
+      $('#result').textContent = 'No scanning engine available.'; $('#btn-start').disabled=false; $('#btn-stop').disabled=true;
+    }
+
+    function stop(){
+      running = false;
+      if(rafId) cancelAnimationFrame(rafId);
+      try{ if(reader) reader.reset(); }catch{}
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+      $('#btn-start').disabled = false; $('#btn-stop').disabled = true;
+    }
+
+    async function scanLoopBD(){
+      if(!running || !detector) return;
+      try{
+        const res = await detector.detect($('#preview'));
+        if(res && res.length){ const f=res[0]; onDetect(f.rawValue, f.format||'unknown'); }
+      }catch{}
+      if(running) rafId = requestAnimationFrame(scanLoopBD);
+    }
+
+    // Image file scanning: prefer BarcodeDetector, fallback to ZXing
+    async function decodeImageFile(file){
+      if(!file) return;
+      await ensureEngine();
+      if(engine==='BarcodeDetector' && 'createImageBitmap' in window){
+        const bmp = await createImageBitmap(file).catch(()=>null);
+        if(bmp){
+          try{ const res = await detector.detect(bmp); if(res && res.length){ const f=res[0]; onDetect(f.rawValue, f.format||'unknown'); return; } }catch{}
+        }
+      }
+      // ZXing fallback
+      if(!ZX){ $('#result').textContent = 'ZXing not available for image decoding.'; return; }
+      const img = document.createElement('img'); img.src = URL.createObjectURL(file);
+      img.onload = async ()=>{ try{ const hints=new Map(); const fmts=getSelectedZXFormats(); if(fmts.length) hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS,fmts); const rdr=new ZX.BrowserMultiFormatReader(hints); const out=await rdr.decodeFromImageElement(img); onDetect(out.getText(), ZX.BarcodeFormat[out.getBarcodeFormat()]); }catch{ $('#result').textContent='No code found in image.'; } URL.revokeObjectURL(img.src); };
+    }
+
+    // Events
+    window.addEventListener('DOMContentLoaded', ()=>{
+      if(location.protocol!=='https:' && location.hostname!=='localhost'){ $('#result').textContent='Please open over HTTPS (or localhost) for camera access.'; }
+      renderHistory();
+      $$('.fmt').forEach(cb => cb.addEventListener('change', ()=>{ /* takes effect on next start */ }));
+      $('#btn-start').addEventListener('click', start);
+      $('#btn-stop').addEventListener('click', stop);
+      $('#file-input').addEventListener('change', e=>decodeImageFile(e.target.files[0]));
+      $('#btn-export').addEventListener('click', exportCSV);
+      $('#btn-clear').addEventListener('click', ()=>{ localStorage.removeItem(LS_KEY); renderHistory(); });
+    });
+  </script>
+</body>
+</html>
